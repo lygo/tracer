@@ -32,6 +32,7 @@ import (
 
 	"github.com/opentracing/opentracing-go"
 	"github.com/opentracing/opentracing-go/ext"
+	tracinglog "github.com/opentracing/opentracing-go/log"
 )
 
 // The various flags of a Span.
@@ -229,6 +230,25 @@ func (sp *Span) Log(data opentracing.LogData) {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 	sp.log(data)
+}
+
+func (sp *Span) LogFields(fields ...tracinglog.Field) {
+	for _, f := range fields {
+		sp.log(opentracing.LogData{
+			Event:     f.Key(),
+			Timestamp: time.Now(),
+			Payload:   f.Value(),
+		})
+	}
+}
+
+func (sp *Span) LogKV(keyValues ...interface{}) {
+	fields, err := tracinglog.InterleavedKVToFields(keyValues)
+	if err != nil {
+		sp.tracer.Logger.Printf("can't parse keyValues: %s", err)
+		return
+	}
+	sp.LogFields(fields...)
 }
 
 func (sp *Span) log(data opentracing.LogData) {

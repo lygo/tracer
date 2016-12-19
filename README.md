@@ -32,8 +32,15 @@ go get github.com/tracer/tracer-ui/cmd/tracer-ui
 
 Create a PostgreSQL user and schema for Tracer and import the file
 `$GOPATH/src/github.com/lygo/tracer/storage/postgres/schema.sql`.
-The example configuration uses the username and password `tracer` and
-the database `postgres`, but you're free to edit the config.
+
+ Example:
+
+```
+$ сreateuser -s -P tracer // pass tracer
+$ createdb testtracer -O tracer
+$ psql testtracer tracer < $GOPATH/src/github.com/lygo/tracer/storage/postgres/schema.sql
+```
+
 
 Now you can start Tracer and its UI:
 

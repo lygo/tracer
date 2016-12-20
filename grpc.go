@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/lygo/tracer/pb"
-
 	"github.com/golang/protobuf/ptypes"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+
+	"github.com/lygo/tracer/pb"
 )
 
 // GRPC is a gRPC-based transport for sending spans to a server.

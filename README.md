@@ -36,7 +36,7 @@ Create a PostgreSQL user and schema for Tracer and import the file
  Example:
 
 ```
-$ сreateuser -s -P tracer // pass tracer
+$ createuser -s -P tracer // pass tracer
 $ createdb testtracer -O tracer
 $ psql testtracer tracer < $GOPATH/src/github.com/lygo/tracer/storage/postgres/schema.sql
 ```

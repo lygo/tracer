@@ -1,0 +1,180 @@
+This file documents some of the early design ideas and questions for
+Tracer.
+
+* The Storer interface
+  The Storer interface provides a simple interface for storing a span.
+
+  The interface is designed in such a way that it can be used for
+  actual "storing the data somewhere" backends (e.g. a BoltDB
+  backend), and for client/server models, where the client is an
+  implementation of Storer, sending the spans to a remote server.
+  Dapper's mode of operation, where spans are stored locally on disk
+  and then picked up by collectors, can also be implemented with this
+  interface.
+
+** Individual function calls vs entire spans
+   Ideally, we would want to store spans as they're being built, to
+   avoid losing any information in the case of a crash. Practically,
+   however, this would ruin performance, and complicate interfaces.
+   Instead, crashes should be analysed differently. Crashes should
+   already be logged with their stack traces and core dumps. It seems
+   feasible to also store the trace ID. As long as some of the spans
+   finished, e.g. in other services, there will be a trace to
+   associate the crash with.
+
+* ID generation
+  Each trace and each span is identified by a unique ID. Generation of
+  this ID is decoupled from the storage backend; however, a storage
+  backend may optionally also support generating IDs.
+
+  Implementations will implement a one-functionxb interface IDGenerator,
+  that returns a uint64.
+
+  A few possible ID generation schemes are:
+
+  - Fully random number sourced from /dev/urandom
+
+    For many systems, this degree of randomness will be enough to
+    guarantee no practical collisions.
+
+  - Relying on globally sequential counters, like those provided by
+    BoltDB and Zookeeper.
+
+    While not generally a good idea due to their impact on
+    performance, they might be useful in local testing.
+
+  - Making use of a system like Snowflake.
+
+* Sampling
+  Any good tracing system should support sampling of traces. With
+  Tracer, we'll use pre-sampling. The server that first accepts a
+  request from a user will determine whether the request should be
+  traced or not. It may do so based on rolling a die, hashing some of
+  the request information, or looking at headers that force tracing
+  the particular request. This sampling decision will then be
+  transmitted in-band to all the other services, which use that
+  information to enable or disable tracing of that particular request.
+
+  From an implementation point of view, there is one distinct
+  complication: We want to provide some kind of interface for
+  different sampling mechanisms. However, these mechanisms will need
+  vastly varying kinds of inputs. Some may want to sample based on an
+  HTTP header, while others may want access to a gRPC connection to
+  extract the IP from. The interface would need to accept a value of
+  type interface{}, and we would need a user-facing API that allows
+  passing request information to the sampler.
+
+  We might also want to design the API in such a way that chaining
+  multiple samplers becomes easy.
+
+* The client/server model
+  Quick notes only for now:
+
+  - Tracing shouldn't negatively impact performance. There shouldn't
+    be a 30ms stall because we're trying to transmit a span while the
+    trace server is down.
+  - We may want to send spans concurrent with the application code.
+    However the Storer implementations would then need to support out
+    of order spans.
+
+* Tracer the set of libraries vs Tracer the application
+  When we speak of Tracer, we refer to two distinct concepts: Tracer,
+  the set of libraries and interfaces that people can use and code
+  against, and Tracer the application that will be deployed on a
+  server to collect traces.
+
+  Every instrumented service will use a subset of Tracer, the
+  libraries: The part that implements the OpenTracer interface and
+  sends data to a Storer. While in testing, the Storer may be an
+  actual storage backend such as BoltDB, in production use it will
+  either be a client in a client/server model, or it will use Dapper's
+  model of collectors. In either case, instrumented services will only
+  use Tracer to generate spans.
+
+  Tracer, the application, will run on servers and be responsible for
+  retrieving spans. It, too, will use the libraries, in particular to
+  use the Storer implementations that store data to disk. Tracer the
+  application will offer at least one way for clients to communicate
+  with it. Tracer the application will also provide APIs to _retrieve_
+  spans, e.g. to display them in a frontend.
+
+  In general, all parts of Tracer (the application and the libraries)
+  are designed in such a way that they can exist in the same process
+  apce as the instrumented service. This is useful for testing out
+  Tracer, and it encourages just the right amount of modularity.
+
+* Querying
+  Storing traces is only useful if they can be retrieved, too.
+
+  Currently we're envisioning an API that allows retrieving traces and
+  spans based on the following data:
+
+  - Time range
+  - Duration
+  - Operation name
+  - Whether a tag is (un)set
+  - Tag value
+  - Log entries
+  - Marked as (un)finished
+
+  Also, instead of individual spans, the API can be instructed to only
+  return the associated root span, i.e. the whole trace.
+
+  The spans should be sortable, at least based on the time range.
+
+  Advanced filtering and sorting will be implemented in the frontend.
+
+* Backends
+  Some quick notes on possible backends.
+
+** PostgreSQL
+   Will perform decently, but will be hard to scale
+** BoltDB
+   Nice for testing or low traffic services. Random write performance
+   is too low for high traffic, and it will not scale beyond a single
+   machine easily.
+** Cassandra
+   Is what Zipkin uses by default and akin to BigTable, which Dapper
+   uses. However it requires running a Java stack. Not having to do
+   that is the primary reason for Tracer.
+
+* One or two spans per RPC request
+  There are two different ways to model internal RPC requests in
+  tracing.
+
+  One way is to use a single span for both the client and
+  server parts. This is the way Zipkin currently operates. In
+  particuar, it records cs, cr, sr and ss events (client send, client
+  receive, server receive, server send) to record timing.
+
+  This model has the benefit of encapsulating the entire lifetime of
+  an RPC call in a single span. However, it makes it harder to record
+  non-RPC request kinds. Furthermore, it complicates building service
+  dependency graphs. The alternative to this is to have two spans, one
+  for the client and one for the server. Instead of storing cs, cr and
+  so on, each span would have a start time and a duration (or end
+  time). In this model, the spans possibly should have an attribute
+  such as "kind", to differentiate client and server spans.
+
+  We will use the two spans model. More generically, this is the model
+  where spans aren't shared across service boundaries.
+
+* Tag value types
+  The OpenTracing spec is somewhat vague on what types have to be
+  supported, but suggests that strings and numeric types should be
+  supported.
+
+  The Go client API will accept all integer and float types, as well
+  as strings. In the backend, however, ints will be stored as floats.
+  For 64-bit integers that means that not the full resolution will be
+  available.
+
+  This is done mainly to simplify storage, and because one major
+  frontend – the browser – will not support 64 bit integers anyway,
+  due to JavaScript. Additionally, it will simplify a possible future
+  query language, as numeric comparisons will always be between two
+  floats, so no implicit or explicit type conversions will be
+  necessary.
+
+  Values of all other types will be dropped, as is suggested by the
+  OpenTracing spec.
